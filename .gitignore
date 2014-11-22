@@ -54,7 +54,5 @@ docs/_build/
 target/
 
 # data
-data/
-*.csv
 *.json
 *.sql
