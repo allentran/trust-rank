@@ -4,6 +4,17 @@ import csv
 import json
 import numpy as np
 from scipy import sparse
+import unicodecsv
+
+
+def load_csv_spark(sc, path):
+
+    csv_rdd = sc.textFile(path)
+    csv_header = sc.broadcast(csv_rdd.first().split(',')).value
+    csv_rdd = csv_rdd.filter(lambda line: line != ','.join(csv_header))
+    csv_rdd = csv_rdd.map(lambda x: unicodecsv.DictReader(iter([x.encode('utf-8')]), csv_header).next())
+
+    return csv_rdd
 
 def load_votes(csv_file, user_pos=0, item_pos=1, vote_pos=2, skip_lines = 1):
 
@@ -11,8 +22,6 @@ def load_votes(csv_file, user_pos=0, item_pos=1, vote_pos=2, skip_lines = 1):
     data = []
     items = {}
     users = {}
-
-
 
     def update_counts(obj, objs, counter):
         if obj not in objs:
@@ -38,7 +47,7 @@ def load_votes(csv_file, user_pos=0, item_pos=1, vote_pos=2, skip_lines = 1):
             cols.append(item_idx)
             data.append(int(vote))
 
-    votes_mat = sparse.csc_matrix( (data,(rows, cols)), shape=(user_counter, item_counter))
+    votes_mat = sparse.csc_matrix( (data,(rows, cols)), shape=(user_counter, item_counter), dtype=float)
 
     return votes_mat, items, users
 
@@ -61,36 +70,41 @@ def order_data(uservotes, n_u, n_i):
            
     return item_order, user_order
 
+def load_trust(csv_file, trust_idx, user_order, skip_lines = 1):
 
+    T = sparse.lil_matrix( (len(user_order), len(user_order)), dtype=float)
 
-
-def load_trust(csv_file, trust_idx=2, skip_lines = 1):
-
-    def update_user(user1, user2, t):
-        if user1 in trust:
-            user_data = trust.pop(user1)
-            user_data.update({user2: t})
-        else:
-            user_data = {user2: t}
-        trust[user1] = user_data
-
-    trust= {}
+    def update_data(u1,u2,t, T):
+        i = user_order[u1]
+        j = user_order[u2]
+        T[i,j] = t
+        T[j,i] = t
 
     with open(csv_file,'rU') as f:
         counter = 0
         reader = csv.reader(f, delimiter=',')
-        for line in reader:
-            if counter < skip_lines:
-                counter += 1
+        for ii, line in enumerate(reader):
+            if ii < skip_lines:
                 continue
             user1 = line[0]
             user2 = line[1]
-            t = line[trust_idx]
-            update_user(user1, user2, t)
-            update_user(user2, user1, t)
-            
-    return trust
+            t = int(line[trust_idx])
     
+            update_data(user1, user2, t, T)
+
+
+    return T
+
+def normalize_trust(T, self_trust=1):
+
+    n = T.shape[0]
+    for ii in xrange(n):
+        other_trust = T[:,ii].sum()
+        T[ii,ii] = other_trust * self_trust
+        T[:,ii] = T[:,ii] / (other_trust + T[ii,ii])
+
+    return T
+        
 
 def main():
 
@@ -117,11 +131,29 @@ def main():
 
     args = parser.parse_args()
 
-    with open(os.path.join(args.data_dir, 'trust.json'), 'wb') as f:
-        json.dump(load_trust(os.path.join(args.data_dir,args.trust)), f)
+    data_dir = args.data_dir
 
-    votes, n_items = load_votes(os.path.join(args.data_dir,args.votes))
-    print order_data(votes, n_u=len(votes), n_i=n_items)
+
+    sc = SparkContext(appName=opts.spark_app_name)
+
+    V0, items, users = load_votes(os.path.join(data_dir,args.votes) )
+    T = load_trust(os.path.join(data_dir, args.trust), 2, users)
+    T_normed = normalize_trust(T, self_trust=1)
+
+    lam = 0.5
+
+    for ii in xrange(V0.shape[0]):
+        tot_votes = V0[ii,:].sum()
+        V0[ii,:] = V0[ii,:]/tot_votes
+
+    supnorm = 20
+    print V0.todense()
+    while supnorm > 0.1:
+        V1 = (1-lam)*T_normed*V0 + lam*V0
+        supnorm = (V1-V0).max()
+        V0 = V1
+    print V1.todense()
+
 
 if __name__ == '__main__':
     main()

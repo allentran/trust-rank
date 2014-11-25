@@ -1,0 +1,11 @@
+#!/bin/bash -e
+
+# (re?)install dependencies
+. $(dirname "$0")/init
+
+exec spark-submit \
+    --master local[6] \
+    "$dir"/propagator.py \
+    --data_dir=data \
+    --votes=votes.csv \
+    --trust=trust.csv \
