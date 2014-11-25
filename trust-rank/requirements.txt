@@ -1,2 +1,4 @@
 numpy==1.9.1
+unicodecsv==0.9.4
+scipy==0.14.0
 wsgiref==0.1.2
