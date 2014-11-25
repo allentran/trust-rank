@@ -4,7 +4,7 @@
 . $(dirname "$0")/init
 
 exec spark-submit \
-    --master local[6] \
+    --master local[8] \
     "$dir"/propagator.py \
     --data_dir=data \
     --votes=votes.csv \
