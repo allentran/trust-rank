@@ -1,7 +1,7 @@
 trust-rank
 ==========
 
-Big Data friendly implementation of PageRank style collaborative filtering with trust
+An Apache Spark implementation of PageRank style collaborative filtering with trust
 
 - lazy loading of data
 - Map Reduce friendly algorithm
