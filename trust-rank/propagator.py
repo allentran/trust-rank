@@ -5,21 +5,6 @@ from pyspark import SparkContext
 
 from input.load_data import load_csv_spark
 
-class Update_v:
-
-    def mapper((r,c),(T_rc, vc)):
-        return r,T_rc*vc
-
-    def reducer(r, vs):
-        return r,np.sum(vs)
-
-    def map_arg_generator(T,v):
-
-        for rr in xrange(T.shape[0]):
-            for rr in xrange(T.shape[0]):
-                if T[rr,jj] > 0:
-                    yield (rr,cc),(T[rr,cc], v[cc])
-
 def update_votes(trust,v0):
 
     friend_trust_votes = trust.join(v0) # returns friend, ( (user,trust), (place,vote))
@@ -86,9 +71,6 @@ def main():
         v1_v0 = v1.map(lambda x: ((x[0], x[1][0]), x[1][1])).join(v0.map(lambda x: ((x[0], x[1][0]), x[1][1])))
         diffs = v1_v0.map(lambda x: abs(x[1][0] - x[1][1])).reduce(lambda x,y: max(x,y))
         supnorm = diffs
-        print 'hahaha' + str(supnorm)
-        import time
-        time.sleep(5)
         v0 = v1
 
 if __name__ == '__main__':
