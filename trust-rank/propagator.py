@@ -1,41 +1,22 @@
-import os
 from argparse import ArgumentParser
+import os
 import numpy as np
 from pyspark import SparkContext
+from operator import add
 
-from input.load_data import load_csv_spark
+from input.load_data import load_csv_spark, normalize_trust_spark
 
-lambdas = {
-    'sum': lambda x,y: x+y,
-    'max': lambda x,y: max(x,y),
-    'diffs': lambda x: ((x[0], x[1][0]), x[1][1]),
-}
+def scale_votes(v):
 
-def update_votes(trust,v0):
+    agg_v = v.map(lambda x: (x[0],x[1][1])).reduceByKey(lambdas['sum'])
+    return v.join(agg_v).map(lambda x: (x[0], (x[1][0][0], x[1][0][1]/x[1][1])))
+ 
+def FriendAdviceToUser(user_trusts, item, friend_score):    
 
-    friend_trust_votes = trust.join(v0) # returns friend, ( (user,trust), (place,vote))
-    friend_trust_votes = friend_trust_votes.map(lambda x: {
-                                'friend': x[0],
-                                'user': x[1][0][0],
-                                'trust': x[1][0][1],
-                                'place': x[1][1][0],
-                                'vote': x[1][1][1]
-                                })
-    user_place_votes = friend_trust_votes.map(lambda x:
-                                                    ((x['user'], x['place']),
-                                                    x['trust']*x['vote'])
-                                                )
-    v1 = user_place_votes.reduceByKey(lambdas['sum']).map(lambda x: (x[0][0], (x[0][1], x[1])))
-
-    return v1
-
-def trust_normalizer(trust):
-
-    # user: trust values pairs 
-    user_totaltrust = trust.map(lambda x: (x[0], x[1][1])).reduceByKey(lambdas['sum'])
-
-    return trust.join(user_totaltrust).map(lambda x: (x[0], (x[1][0][0], x[1][0][1]/x[1][1])))
-
+    for user,trust in user_trusts:
+        friends_weighted_advice = trust * friend_score
+        yield ((user, item), friends_weighted_advice)
+                                                         
 def main():
 
     parser = ArgumentParser()
@@ -65,34 +46,36 @@ def main():
     args = parser.parse_args()
 
     sc = SparkContext()
+
+    data_dir = args.data_dir
     
-    votes = load_csv_spark(sc, os.path.join(args.data_dir, args.votes))
-    trust = load_csv_spark(sc, os.path.join(args.data_dir, args.trust))
+    delta = 0.5
 
-    # ensure trust relation is symmetric
-    # although not necessary
-    trust = trust.flatMap(lambda x: [
-                            (x['user_1'], (x['user_2'], float(x['trust']))), 
-                            (x['user_2'], (x['user_1'], float(x['trust']))), 
-                            ]).distinct()
-    trust = trust_normalizer(trust).filter(lambda x: x[1][1]>0)
+    items = load_csv_spark(sc, os.path.join(data_dir,args.votes)) 
+    trust = load_csv_spark(sc, os.path.join(data_dir,args.trust)) 
 
-    # key votes by user
-    votes = votes.map(lambda x: (x['user'],(x['place'], float(x['vote'])))) 
+    # load trust and normalize
+    trust = normalize_trust_spark(trust)
+    own_advice = items.map(lambda (user, item, score): (user, (item, float(score))))
 
-    v0 = votes
-    supnorm = 20
-    kappa = 0.5
+    epsilon
 
-    while supnorm > 1:
-        v1 = update_votes(trust, v0).map(lambda x: (x[0],(x[1][0], x[1][1]*kappa))) + v0.map(lambda x: (x[0],(x[1][0], x[1][1]*(1-kappa))))
-        v1_v0 = v1.map(lambdas['diffs']).join(v0.map(lambdas['diffs']))
-        diffs = v1_v0.map(lambda x: abs(x[1][0] - x[1][1])).reduce(lambdas['max'])
-        supnorm = diffs
-        time.sleep(5)
-        v0 = v1
+    while True:
+        distinct_advice = trust.join(own_advice).flatMap(lambda (friend, (user_trusts, (item, friend_score))): FriendAdviceToUser(user_trusts, item, friend_score)) 
+        aggregated_advice = distinct_advice.reduceByKey(add)
 
-    v1.map(lambda x: (x[0], x[1][0], x[1][1])).saveAsTextFile(args.outfile) 
+        updated_advice = aggregated_advice.leftOuterJoin(own_advice.map(lambda (user, (item, score)): ((user, item), score)))
+        updated_advice = updated_advice.mapValues(lambda (new_rating, old_rating): (new_rating, old_rating or 0))
+        updated_advice = updated_advice.mapValues(lambda (new_rating, old_rating): (delta*new_rating + (1-delta)*old_rating, old_rating))
+        max_diff = updated_advice.mapValues(lambda (old, new): abs(old-new)).map(lambda ((user, item), d): d) \
+                                                                            .reduce(lambda a,b: max(a,b))
+        if max_diff < 0.05:
+            print own_advice.collect()
+            break
+        own_advice = updated_advice.map(lambda ((user, item), (updated_score, old_score)): (user, (item, updated_score)))   
+        iters += 1
+
+    
 
 if __name__ == '__main__':
     main()

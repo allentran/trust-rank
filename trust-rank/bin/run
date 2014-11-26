@@ -9,3 +9,4 @@ exec spark-submit \
     --data_dir=data \
     --votes=votes.csv \
     --trust=trust.csv \
+    --outfile=$1
